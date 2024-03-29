@@ -1,11 +1,10 @@
 class UsersController < ApplicationController
   before_action :set_user, only: [:update]
 
-  JWT_SECRET = "679441d1edf3bd9ac4e7ab31f8c1034e845c2f83743c9e3c8fbb639708d539a6"
   def create
     @user = User.new(user_params)
     if @user.save
-      notify_third_party_apis(@user)
+      notify_third_party_apis(@user, operation: :create)
       render json: @user, status: :created
     else
       render json: @user.errors, status: :unprocessable_entity
@@ -14,7 +13,7 @@ class UsersController < ApplicationController
 
   def update
     if @user.update(user_params)
-      notify_third_party_apis(@user)
+      notify_third_party_apis(@user, operation: :update)
       render json: @user, status: :ok
     else
       render json: @user.errors, status: :unprocessable_entity
@@ -31,18 +30,34 @@ class UsersController < ApplicationController
     @user = User.find(params[:id])
   end
 
-  def notify_third_party_apis(user_data_change)
-    jwt_payload = { user_id: user_data_change.id }
-    jwt_token = JWT.encode(jwt_payload, JWT_SECRET, 'HS256')
-    begin
-      response = RestClient.get('http://localhost:3001/movies', { Authorization: "Bearer #{jwt_token}" })
-      puts "Notification sent successfully! Response: #{response}" 
-    rescue RestClient::ExceptionWithResponse => e
-      puts "Failed to send notification: #{e.response}"
-    rescue RestClient::Exception, Errno::ECONNREFUSED => e
-      puts "Failed to send notification: #{e.message}"
+  def notify_third_party_apis(user_data_change, operation:)
+    jwt_payload = { user_id: user_data_change.id, operation: operation }
+    jwt_token = JWT.encode(jwt_payload, ENV['JWT_SECRET'], 'HS256')
+
+    params = {
+      name: user_data_change.name,
+      email: user_data_change.email,
+      operation: operation
+    }
+
+    urls = ENV['THIRD_PARTY_URL']&.split(',')
+
+    if urls.present?
+      urls.each do |url|
+        puts "Checking url #{url}"
+        begin
+          response = RestClient.post(url.strip, params.to_json, Authorization: "Bearer #{jwt_token}", content_type: :json)
+          puts "Notification sent successfully to #{url}! Response: #{response}"
+        rescue RestClient::ExceptionWithResponse => e
+          puts "Failed to send notification to #{url}: #{e.response}"
+          # Handle error for this URL, e.g., log the error or retry later
+        rescue RestClient::Exception, Errno::ECONNREFUSED => e
+          puts "Failed to send notification to #{url}: #{e.message}"
+          # Handle error for this URL, e.g., log the error or retry later
+        end
+      end
+    else
+      puts "No URLs found in the environment variable THIRD_PARTY_URL_1"
     end
-
   end
-
 end
